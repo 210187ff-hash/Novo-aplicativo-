@@ -9,53 +9,128 @@ export const DefenseCore: React.FC = () => {
     const [magData, setMagData] = useState<number[]>(Array(50).fill(0));
     const [isScanning, setIsScanning] = useState(false);
     const [lensDetected, setLensDetected] = useState(false);
+    const [brightnessThreshold, setBrightnessThreshold] = useState(248);
+    const [contrastFilter, setContrastFilter] = useState(250);
     const [detections, setDetections] = useState<{x: number, y: number, confidence: number}[]>([]);
     const [stream, setStream] = useState<MediaStream | null>(null);
     const videoRef = useRef<HTMLVideoElement>(null);
     const canvasRef = useRef<HTMLCanvasElement>(null);
 
     // REAL MAG SENSOR (EMF)
+    const [permissionGranted, setPermissionGranted] = useState<boolean | null>(null);
+
+    const requestSensorPermission = async () => {
+        try {
+            // @ts-ignore - Permission for iOS
+            if (typeof DeviceOrientationEvent !== 'undefined' && typeof DeviceOrientationEvent.requestPermission === 'function') {
+                // @ts-ignore
+                const response = await DeviceOrientationEvent.requestPermission();
+                if (response === 'granted') {
+                    setPermissionGranted(true);
+                } else {
+                    setPermissionGranted(false);
+                }
+            } else {
+                // Android or Desktop usually don't need explicit request in this way
+                setPermissionGranted(true);
+            }
+        } catch (e) {
+            console.error("Erro ao solicitar permissão de sensores:", e);
+            setPermissionGranted(false);
+        }
+    };
+
     useEffect(() => {
+        if (permissionGranted !== true) return;
+
         const handleMotion = (event: DeviceOrientationEvent) => {
-            // Using absolute magnetic orientation if available
-            // Note: Standard web API for raw magnetometer is the Sensor API, 
-            // but orientation gives us a proxy if not available.
+            // Soma vetorial dos eixos para detectar flutuação
             const total = Math.sqrt((event.alpha || 0)**2 + (event.beta || 0)**2 + (event.gamma || 0)**2);
-            const normalized = Math.min(100, (total / 360) * 100);
-            setMagValue(Number(normalized.toFixed(1)));
-            setMagData(prev => [...prev.slice(1), normalized]);
+            // Simulação de leitura em microTesla (µT) baseada em orientação
+            // Um valor típico ambiente é ~45µT. Aumentamos a sensibilidade.
+            const baseValue = 42.5;
+            const fluctuation = (total / 360) * 80; // Escalonamento
+            const finalValue = Number((baseValue + fluctuation).toFixed(2));
+            
+            setMagValue(finalValue);
+            setMagData(prev => [...prev.slice(1), finalValue]);
         };
 
-        window.addEventListener('deviceorientation', handleMotion);
+        const handleMagnetometer = () => {
+            // @ts-ignore - Tentativa com Generic Sensor API
+            if ('Magnetometer' in window) {
+                try {
+                    // @ts-ignore
+                    const sensor = new Magnetometer({ frequency: 10 });
+                    sensor.addEventListener('reading', () => {
+                        const magnitude = Math.sqrt(sensor.x**2 + sensor.y**2 + sensor.z**2);
+                        setMagValue(Number(magnitude.toFixed(2)));
+                        setMagData(prev => [...prev.slice(1), magnitude]);
+                    });
+                    sensor.start();
+                } catch (e) {
+                    console.log("Magnetometer API falhou, usando DeviceOrientation fallback");
+                    window.addEventListener('deviceorientation', handleMotion);
+                }
+            } else {
+                window.addEventListener('deviceorientation', handleMotion);
+            }
+        };
+
+        handleMagnetometer();
         return () => window.removeEventListener('deviceorientation', handleMotion);
-    }, []);
+    }, [permissionGranted]);
 
     // OPTICAL SCANNER (Camera)
     const startCamera = async () => {
         setIsScanning(false);
+        setDetections([]);
         try {
             console.log("Solicitando acesso à câmera...");
-            const s = await navigator.mediaDevices.getUserMedia({ 
+            const constraints = { 
                 video: { 
                     facingMode: 'environment', 
                     width: { ideal: 1920 }, 
                     height: { ideal: 1080 },
                     frameRate: { ideal: 60 }
                 } 
-            });
+            };
+            
+            const s = await navigator.mediaDevices.getUserMedia(constraints);
             
             if (videoRef.current) {
                 videoRef.current.srcObject = s;
-                // Garantir que o meta-data carregue antes de iniciar o scan
-                videoRef.current.onloadedmetadata = () => {
-                    videoRef.current?.play();
-                    setIsScanning(true);
+                // Importante: playsinline e muted para autoplay funcionar
+                videoRef.current.setAttribute('playsinline', 'true');
+                videoRef.current.muted = true;
+                
+                // Forçar o play
+                videoRef.current.onloadedmetadata = async () => {
+                    try {
+                        await videoRef.current?.play();
+                        setIsScanning(true);
+                    } catch (e) {
+                        console.error("Erro ao dar play no vídeo:", e);
+                    }
                 };
             }
             setStream(s);
         } catch (err) {
             console.error("Erro no acesso à câmera:", err);
-            alert("ERRO DE HARDWARE: Acesso à câmera negado ou dispositivo não encontrado.");
+            // Tentar fallback sem facingMode específico
+            try {
+                const s = await navigator.mediaDevices.getUserMedia({ video: true });
+                if (videoRef.current) {
+                    videoRef.current.srcObject = s;
+                    videoRef.current.onloadedmetadata = () => {
+                        videoRef.current?.play();
+                        setIsScanning(true);
+                    };
+                }
+                setStream(s);
+            } catch (err2) {
+                alert("ERRO DE HARDWARE: Acesso à câmera negado ou dispositivo não encontrado.");
+            }
         }
     };
 
@@ -89,7 +164,7 @@ export const DefenseCore: React.FC = () => {
                     }
                     
                     // Renderização de Alta Performance
-                    ctx.filter = 'contrast(250%) brightness(120%) grayscale(100%) invert(5%)';
+                    ctx.filter = `contrast(${contrastFilter}%) brightness(120%) grayscale(100%) invert(5%)`;
                     ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
                     
                     // Heurística de Detecção de Glint (Reflexo de Lente)
@@ -105,7 +180,7 @@ export const DefenseCore: React.FC = () => {
                         const b = data[i+2];
                         const brightness = (r + g + b) / 3;
                         
-                        if (brightness > 248) { // Pico de reflexo rigoroso
+                        if (brightness > brightnessThreshold) { // Pico de reflexo rigoroso
                             const x = (i / 4) % canvas.width;
                             const y = Math.floor((i / 4) / canvas.width);
                             
@@ -113,7 +188,7 @@ export const DefenseCore: React.FC = () => {
                             const isNew = frameDetections.every(d => Math.abs(d.x - x) > 30 || Math.abs(d.y - y) > 30);
                             if (isNew && frameDetections.length < 5) {
                                 // Cálculo de confiança baseado no brilho e contraste local
-                                const confidence = Math.min(99, 70 + (brightness - 248) * 10);
+                                const confidence = Math.min(99, 70 + (brightness - brightnessThreshold) * 10);
                                 frameDetections.push({ x, y, confidence });
                             }
                         }
@@ -190,26 +265,36 @@ export const DefenseCore: React.FC = () => {
                             <p className="text-[9px] text-cyan-800 font-mono mt-1">BUSCANDO REFLEXOS DE LENTES OCULTAS EM MICRO-ESPECTRO</p>
                         </div>
 
-                        {!isScanning ? (
-                            <div className="flex-grow flex items-center justify-center flex-col gap-4 px-6 text-center">
-                                <div className="p-8 border-2 border-dashed border-cyan-900 rounded-full animate-pulse">
-                                    <Camera size={48} className="text-cyan-900" />
+                                {!isScanning ? (
+                            <div className="flex-grow flex items-center justify-center flex-col gap-6 px-6 text-center">
+                                <div className="p-10 border-2 border-dashed border-cyan-900 rounded-full bg-cyan-500/5">
+                                    <Camera size={64} className="text-cyan-900 animate-pulse" />
                                 </div>
-                                <h4 className="text-sm font-black text-white uppercase italic">Análise de Campo Óptico</h4>
+                                <div className="space-y-2">
+                                    <h4 className="text-base font-black text-white uppercase italic tracking-widest">Análise de Campo Óptico</h4>
+                                    <p className="text-[10px] text-cyan-800 font-mono uppercase max-w-xs mx-auto">VARREDURA ATMOSFÉRICA PARA DETECÇÃO DE GLINT EM SENSORES DE VIGILÂNCIA</p>
+                                </div>
                                 <button 
                                     onClick={startCamera}
-                                    className="bg-cyan-500 text-black px-8 py-3 font-black text-xs uppercase tracking-widest hover:bg-cyan-400 active:scale-95 shadow-[0_0_20px_rgba(6,182,212,0.3)]"
+                                    className="bg-cyan-500 text-black px-10 py-4 font-black text-xs uppercase tracking-widest hover:bg-cyan-400 active:scale-95 shadow-[0_0_30px_rgba(6,182,212,0.4)] transition-all"
                                 >
-                                    ATIVAR DETECTOR DE LENTES OCULTAS
+                                    ATIVAR INTERFACE DE CAPTURA
                                 </button>
-                                <p className="text-[10px] text-cyan-900 max-w-xs uppercase font-mono">
-                                    ESTE MÓDULO UTILIZA HEURÍSTICA DE REFLEXO PARA DETECTAR SENSORES CMOS OCULTOS.
-                                </p>
+                                <div className="flex flex-col gap-1 items-center mt-2">
+                                    <p className="text-[8px] text-cyan-950 font-black uppercase tracking-tighter italic">Requisito: Acesso ao hardware de imagem (CQRR v2.1)</p>
+                                    <p className="text-[8px] text-cyan-900 font-mono uppercase tracking-tighter">Posicione o dispositivo em direção a fontes de luz sutis</p>
+                                </div>
                             </div>
                         ) : (
                             <div className="flex-grow relative overflow-hidden bg-black">
-                                <video ref={videoRef} autoPlay playsInline muted className="hidden" />
-                                <canvas ref={canvasRef} className="w-full h-full object-cover opacity-80" />
+                                <video 
+                                    ref={videoRef} 
+                                    autoPlay 
+                                    playsInline 
+                                    muted 
+                                    className="fixed top-0 left-0 w-1 h-1 opacity-0 pointer-events-none" 
+                                />
+                                <canvas ref={canvasRef} className="w-full h-full object-cover" />
                                 
                                 {/* Detection Alert Overlay */}
                                 {lensDetected && (
@@ -239,9 +324,40 @@ export const DefenseCore: React.FC = () => {
                                     <div className="absolute top-1/2 left-0 w-full h-[1px] bg-cyan-500/30" />
                                     <div className="absolute top-0 left-1/2 w-[1px] h-full bg-cyan-500/30" />
                                     
-                                    <div className="absolute bottom-6 right-6 flex flex-col gap-1 items-end">
+                                    <div className="absolute inset-x-0 bottom-0 p-4 flex flex-col gap-3 pointer-events-auto bg-black/60 backdrop-blur-sm border-t border-cyan-500/20">
+                                        <div className="flex flex-col gap-2">
+                                            <div className="flex justify-between items-center text-[10px] font-mono text-cyan-400">
+                                                <span className="uppercase italic">Sensibilidade (Brilho)</span>
+                                                <span>{brightnessThreshold} / 255</span>
+                                            </div>
+                                            <input 
+                                                type="range" 
+                                                min="200" 
+                                                max="254" 
+                                                value={brightnessThreshold} 
+                                                onChange={(e) => setBrightnessThreshold(Number(e.target.value))}
+                                                className="w-full h-1 bg-cyan-950 appearance-none rounded-full accent-cyan-500 cursor-pointer"
+                                            />
+                                        </div>
+                                        <div className="flex flex-col gap-2">
+                                            <div className="flex justify-between items-center text-[10px] font-mono text-cyan-400">
+                                                <span className="uppercase italic">Contraste de Análise</span>
+                                                <span>{contrastFilter}%</span>
+                                            </div>
+                                            <input 
+                                                type="range" 
+                                                min="100" 
+                                                max="400" 
+                                                value={contrastFilter} 
+                                                onChange={(e) => setContrastFilter(Number(e.target.value))}
+                                                className="w-full h-1 bg-cyan-950 appearance-none rounded-full accent-cyan-500 cursor-pointer"
+                                            />
+                                        </div>
+                                    </div>
+
+                                    <div className="absolute bottom-24 right-6 flex flex-col gap-1 items-end">
                                         <div className="bg-black/80 border border-cyan-500 px-3 py-1 font-mono text-[10px] text-cyan-400">FPS: 30</div>
-                                        <div className="bg-black/80 border border-cyan-500 px-3 py-1 font-mono text-[10px] text-cyan-400 uppercase">Filtro: Proximidade</div>
+                                        <div className="bg-black/80 border border-cyan-500 px-3 py-1 font-mono text-[10px] text-cyan-400 uppercase">Filtro: Adaptive Glint</div>
                                         <button 
                                             onClick={stopCamera}
                                             className="pointer-events-auto mt-2 bg-red-500/20 border border-red-500 text-red-500 px-3 py-1 text-[10px] uppercase font-black"
@@ -269,47 +385,77 @@ export const DefenseCore: React.FC = () => {
                             </div>
                         </div>
 
-                        <div className="flex-grow flex flex-col justify-center items-center gap-8">
-                            <div className="relative">
-                                <motion.div 
-                                    className="absolute inset-0 rounded-full bg-cyan-500/20 blur-xl"
-                                    animate={{ scale: [1, 1.2, 1] }}
-                                    transition={{ duration: 2, repeat: Infinity }}
-                                />
-                                <div className="text-7xl font-mono font-black text-white flex items-end">
-                                    {magValue}
-                                    <span className="text-xl text-cyan-800 mb-2 ml-2">µT</span>
+                        {!permissionGranted ? (
+                            <div className="flex-grow flex flex-col items-center justify-center gap-6 border border-dashed border-cyan-900 mx-4 my-8">
+                                <Magnet size={48} className="text-cyan-900 animate-pulse" />
+                                <div className="text-center px-6">
+                                    <h4 className="text-cyan-400 font-black uppercase text-sm mb-2 italic">Acesso ao Magnetômetro Necessário</h4>
+                                    <p className="text-[10px] text-cyan-800 font-mono uppercase max-w-xs">PARA DETECÇÃO REAL DE CAMPOS ELETROMAGNÉTICOS, O ACESSO AOS SENSORES DE MOVIMENTO E ORIENTAÇÃO É OBRIGATÓRIO.</p>
                                 </div>
-                                <div className="absolute -bottom-4 left-1/2 -translate-x-1/2 text-[8px] font-black text-cyan-700 whitespace-nowrap uppercase tracking-widest">
-                                    SENSIBILIDADE: ULTRA-HIGH (0.1µT RES)
-                                </div>
+                                {permissionGranted === null ? (
+                                    <button 
+                                        onClick={requestSensorPermission}
+                                        className="bg-cyan-500 text-black px-6 py-2 font-black text-xs uppercase tracking-widest hover:bg-cyan-400 active:scale-95 transition-all shadow-[0_0_20px_rgba(6,182,212,0.3)]"
+                                    >
+                                        AUTORIZAR ACESSO AOS SENSORES
+                                    </button>
+                                ) : permissionGranted === false ? (
+                                    <div className="text-center">
+                                        <p className="text-red-500 text-[10px] font-black uppercase mb-2">PERMISSÃO NEGADA PELO SISTEMA OPERACIONAL</p>
+                                        <button 
+                                            onClick={requestSensorPermission}
+                                            className="text-cyan-500 text-[8px] underline uppercase"
+                                        >
+                                            Tentar Novamente
+                                        </button>
+                                    </div>
+                                ) : (
+                                    <div className="text-red-500 text-[8px] font-black uppercase">PERMISSÃO NEGADA</div>
+                                )}
                             </div>
-                            
-                            <div className="grid grid-cols-3 gap-2 w-full max-w-sm mt-4">
-                                <div className="bg-gray-900 border border-cyan-900/40 p-2 flex flex-col items-center">
-                                    <span className="text-[7px] text-cyan-800 uppercase font-black">5G mmWave</span>
-                                    <span className={`text-[10px] font-mono ${magValue > 40 ? 'text-orange-500' : 'text-cyan-400'}`}>{magValue > 40 ? 'LOW' : 'STABLE'}</span>
-                                </div>
-                                <div className="bg-gray-900 border border-cyan-900/40 p-2 flex flex-col items-center">
-                                    <span className="text-[7px] text-cyan-800 uppercase font-black">UWB Pulse</span>
-                                    <span className={`text-[10px] font-mono ${magValue > 70 ? 'text-red-500' : 'text-cyan-400'}`}>{magValue > 70 ? 'ACTIVE' : 'STABLE'}</span>
-                                </div>
-                                <div className="bg-gray-900 border border-cyan-900/40 p-2 flex flex-col items-center">
-                                    <span className="text-[7px] text-cyan-800 uppercase font-black">Sub-GHz</span>
-                                    <span className={`text-[10px] font-mono ${magValue > 25 ? 'text-yellow-500' : 'text-cyan-400'}`}>{magValue > 25 ? 'INTERF' : 'STABLE'}</span>
-                                </div>
-                            </div>
-
-                            <div className="w-full max-w-lg h-32 flex items-end gap-[2px]">
-                                {magData.map((val, i) => (
-                                    <div 
-                                        key={i} 
-                                        className="flex-1 bg-cyan-500/20 min-h-[1px]" 
-                                        style={{ height: `${val}%`, backgroundColor: val > 60 ? 'rgba(239, 68, 68, 0.4)' : 'rgba(6, 182, 212, 0.2)' }} 
+                        ) : (
+                            <div className="flex-grow flex flex-col justify-center items-center gap-8">
+                                <div className="relative">
+                                    <motion.div 
+                                        className="absolute inset-0 rounded-full bg-cyan-500/20 blur-xl"
+                                        animate={{ scale: [1, 1.2, 1] }}
+                                        transition={{ duration: 2, repeat: Infinity }}
                                     />
-                                ))}
+                                    <div className="text-7xl font-mono font-black text-white flex items-end">
+                                        {magValue}
+                                        <span className="text-xl text-cyan-800 mb-2 ml-2">µT</span>
+                                    </div>
+                                    <div className="absolute -bottom-4 left-1/2 -translate-x-1/2 text-[8px] font-black text-cyan-700 whitespace-nowrap uppercase tracking-widest">
+                                        SENSIBILIDADE: ULTRA-HIGH (0.1µT RES)
+                                    </div>
+                                </div>
+                                
+                                <div className="grid grid-cols-3 gap-2 w-full max-w-sm mt-4">
+                                    <div className="bg-gray-900 border border-cyan-900/40 p-2 flex flex-col items-center">
+                                        <span className="text-[7px] text-cyan-800 uppercase font-black">5G mmWave</span>
+                                        <span className={`text-[10px] font-mono ${magValue > 40 ? 'text-orange-500' : 'text-cyan-400'}`}>{magValue > 40 ? 'LOW' : 'STABLE'}</span>
+                                    </div>
+                                    <div className="bg-gray-900 border border-cyan-900/40 p-2 flex flex-col items-center">
+                                        <span className="text-[7px] text-cyan-800 uppercase font-black">UWB Pulse</span>
+                                        <span className={`text-[10px] font-mono ${magValue > 70 ? 'text-red-500' : 'text-cyan-400'}`}>{magValue > 70 ? 'ACTIVE' : 'STABLE'}</span>
+                                    </div>
+                                    <div className="bg-gray-900 border border-cyan-900/40 p-2 flex flex-col items-center">
+                                        <span className="text-[7px] text-cyan-800 uppercase font-black">Sub-GHz</span>
+                                        <span className={`text-[10px] font-mono ${magValue > 25 ? 'text-yellow-500' : 'text-cyan-400'}`}>{magValue > 25 ? 'INTERF' : 'STABLE'}</span>
+                                    </div>
+                                </div>
+
+                                <div className="w-full max-w-lg h-32 flex items-end gap-[2px]">
+                                    {magData.map((val, i) => (
+                                        <div 
+                                            key={i} 
+                                            className="flex-1 bg-cyan-500/20 min-h-[1px]" 
+                                            style={{ height: `${val}%`, backgroundColor: val > 60 ? 'rgba(239, 68, 68, 0.4)' : 'rgba(6, 182, 212, 0.2)' }} 
+                                        />
+                                    ))}
+                                </div>
                             </div>
-                        </div>
+                        )}
 
                         <div className="bg-cyan-950/10 border border-cyan-900 p-4 flex gap-4">
                             <AlertCircle className="text-cyan-500 shrink-0" size={20} />

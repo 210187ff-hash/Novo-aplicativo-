@@ -138,35 +138,63 @@ export const ToolsetExpanded: React.FC = () => {
     );
 
     const runTool = (tool: Tool) => {
-        const ToolIcon = getToolIcon(tool.name);
         setActiveTool(tool);
         setIsExecuting(true);
-        setTerminalLogs([`> INICIALIZANDO: ${tool.name.toUpperCase()}`, `> CATEGORIA: ${tool.category.toUpperCase()}`, `> ESTADO: CARREGANDO DEPENDÊNCIAS...`]);
+        setTerminalLogs([
+            `[SYSTEM] INICIALIZANDO: ${tool.name.toUpperCase()}`,
+            `[SYSTEM] MÓDULO: ${tool.category.toUpperCase()}`,
+            `[SYSTEM] NÍVEL: ${tool.complexity.toUpperCase()}`,
+            `[KERNEL] Solicitando alocação de heap para processo audit_v4...`,
+            `[KERNEL] Hooking syscalls para interceptação de tráfego...`
+        ]);
         setProgress(0);
 
-        const technicalLogs = [
-            `[INFO] Hooking kernel process ID: ${Math.floor(Math.random() * 9999)}`,
-            `[DEBUG] Alocando buffer de memória: 0x${Math.random().toString(16).slice(2, 10).toUpperCase()}`,
-            `[AUTH] Solicitando privilégios de ROOT (Aegis-Kernel-v4)...`,
-            `[SUCCESS] Acesso concedido. Iniciando vetor de ataque...`,
-            `[SCAN] Escaneando portas no espectro ${tool.category}...`,
-            `[PACKET] Injetando frames de controle: 0xAF 0xBC 0x22`,
-            `[LOG] bypass_status=TRUE entropy_level=0.98`,
-            `[ALERT] Resposta detectada do nó alvo...`,
-            `[FINAL] Operação concluída com sucesso.`
+        const technicalLogs: Record<string, string[]> = {
+            'Rede': [
+                `[NET] Abrindo sockets brutos para análise de frames...`,
+                `[SCAN] Identificando nós ativos na sub-rede...`,
+                `[Bypass] Ignorando detecção de IDS/IPS local...`,
+                `[AUTH] Tentando escalonamento de privilégios via SSH exploit...`,
+                `[SUCCESS] Canal de comunicação persistente estabelecido.`
+            ],
+            'Wireless': [
+                `[RF] Sintonizando interface de rede em modo monitor...`,
+                `[WLAN] Capturando beacons de gerenciamento (Management Frames)...`,
+                `[DEAUTH] Injetando pacotes de desautenticação IEEE 802.11...`,
+                `[INFO] Handshake capturado. Iniciando quebra offline...`,
+                `[STATE] Monitorando canal de controle para mudanças de frequência...`
+            ],
+            'Sistema': [
+                `[OS] Analisando estrutura de processos do kernel...`,
+                `[MEMORY] Varrendo endereços de memória em busca de segredos...`,
+                `[SYSTEM] Aplicando patch em tempo real na tabela de símbolos...`,
+                `[ESCALATION] Sucesso: Privilégios de ROOT (uid=0) concedidos.`,
+                `[CLEAN] Apagando rastros do histórico de auditoria...`
+            ]
+        };
+
+        const logs = technicalLogs[tool.category] || [
+            `[DEBUG] Iniciando rotina padrão de auditoria diagnóstica...`,
+            `[INFO] Preparando ambiente isolado para execução do vetor...`,
+            `[SUCCESS] Vetor injetado com sucesso no alvo remoto.`,
+            `[DATA] Sifão de dados ativo: 0x${Math.random().toString(16).slice(2, 6)}...`,
+            `[FINAL] Operação concluída. logs compactados e enviados.`
         ];
 
         let currentStep = 0;
+        const totalSteps = logs.length;
         const interval = setInterval(() => {
-            if (currentStep < technicalLogs.length) {
-                setTerminalLogs(prev => [...prev, `> ${technicalLogs[currentStep]}`]);
-                setProgress(prev => Math.min(100, prev + (100 / technicalLogs.length)));
+            if (currentStep < totalSteps) {
+                setTerminalLogs(prev => [...prev, `> ${logs[currentStep]}`]);
+                setProgress(prev => Math.min(100, prev + (100 / totalSteps)));
                 currentStep++;
             } else {
                 clearInterval(interval);
                 setIsExecuting(false);
+                setTerminalLogs(prev => [...prev, `[COMPLETE] ${tool.name} finalizado com 0 erros.`]);
+                setProgress(100);
             }
-        }, 800);
+        }, 600);
     };
 
     return (

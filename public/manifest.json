@@ -1,0 +1,23 @@
+{
+  "name": "NetAudit PRO",
+  "short_name": "NetAudit",
+  "description": "Ferramenta profissional para auditoria de redes WiFi e análise de segurança para Android.",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#000000",
+  "theme_color": "#06b6d4",
+  "icons": [
+    {
+      "src": "https://aistudiocdn.com/icons/wifi-security-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "https://aistudiocdn.com/icons/wifi-security-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ]
+}

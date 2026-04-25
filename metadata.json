@@ -1,0 +1,9 @@
+{
+  "name": "Aegis KERNEL Native",
+  "description": "Ferramenta profissional para auditoria de redes WiFi e análise de segurança nível contra-inteligência. Inclui IA de ataque tático, detector de lentes ocultas, scanner EMF e arsenal com 50+ ferramentas de penetração.",
+  "requestFramePermissions": [
+    "camera",
+    "geolocation"
+  ],
+  "majorCapabilities": []
+}
